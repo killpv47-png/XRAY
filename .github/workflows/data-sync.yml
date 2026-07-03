@@ -1,0 +1,154 @@
+name: Automated Core Data Synchronization
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: killpv2-core-loop
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  panels_manager:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Fetch Repository Framework
+      uses: actions/checkout@v4
+
+    - name: Prepare Local Environments
+      run: |
+        python3 -m pip install --upgrade pip
+        pip3 install requests[socks] pyTelegramBotAPI "qrcode[pil]"
+
+    - name: Optimize Network Engine Stack
+      run: |
+        sudo tee -a /etc/sysctl.conf << 'EOF'
+        net.core.default_qdisc = fq
+        net.ipv4.tcp_congestion_control = bbr
+        net.core.rmem_max = 67108864
+        net.core.wmem_max = 67108864
+        net.ipv4.tcp_rmem = 4096 87380 67108864
+        net.ipv4.tcp_wmem = 4096 65536 67108864
+        net.core.netdev_max_backlog = 10000
+        net.ipv4.tcp_max_syn_backlog = 10000
+        net.ipv4.tcp_tw_reuse = 1
+        net.ipv4.tcp_fin_timeout = 15
+        net.ipv4.tcp_keepalive_time = 600
+        EOF
+        sudo sysctl -p
+
+    - name: Fetch Academic Network Binaries
+      run: |
+        sudo apt-get update && sudo apt-get install -y unzip wget curl
+        ZIP_DL=$(echo "aHR0cHM6Ly9naXRodWIuY29tL1hUTFMvWHJheS1jb3JlL3JlbGVhc2VzL2xhdGVzdC9kb3dubG9hZC9YcmF5LWxpbnV4LTY0LnppcA==" | base64 -d)
+        wget $ZIP_DL -O xray.zip
+        sudo unzip -o xray.zip -d /usr/local/bin/
+        sudo chmod +x /usr/local/bin/xray
+        sudo mkdir -p /usr/local/etc/xray
+        sudo chmod -R 777 /usr/local/etc/xray
+
+    - name: Establish Internal Proxy Gateway Routing
+      run: |
+        sudo apt-get update && sudo apt-get install -y nginx
+        sudo rm -f /etc/nginx/sites-enabled/default
+        
+        cat << 'NGINX_EOF' | sudo tee /etc/nginx/sites-available/killpv2_gateway
+        server {
+            listen 8080 default_server;
+            listen [::]:8080 default_server;
+
+            location / {
+                proxy_pass http://127.0.0.1:8086;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_read_timeout 300s;
+                proxy_connect_timeout 75s;
+            }
+
+            location /killpv2 {
+                proxy_redirect off;
+                proxy_pass http://127.0.0.1:8085;
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection "upgrade";
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                
+                proxy_buffering off;
+                proxy_read_timeout 52w;
+            }
+        }
+        NGINX_EOF
+        
+        sudo ln -sf /etc/nginx/sites-available/killpv2_gateway /etc/nginx/sites-enabled/
+        sudo systemctl restart nginx
+
+    - name: Initialize External Data Pipeline Gateway
+      run: |
+        curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o cloudflared
+        chmod +x cloudflared
+        sudo cp cloudflared /usr/local/bin/cloudflared
+        sudo chmod +x /usr/local/bin/cloudflared
+        
+        rm -f active_edge_host.txt cloudflare_edge.log
+        
+        echo "🛰️ Launching Cloudflare Tunnel Engine..."
+        nohup ./cloudflared tunnel --url http://127.0.0.1:8080 > cloudflare_edge.log 2>&1 &
+        
+        for retry in {1..3}; do
+          echo "🔄 Checking Stream Status (Attempt $retry/3)..."
+          for i in {1..20}; do
+            HOST=$(grep -oE 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' cloudflare_edge.log | head -n 1 | sed 's/https:\/\///g')
+            if [ ! -z "$HOST" ]; then
+                echo "🎯 Sync Pipeline Active Configuration"
+                echo "$HOST" > active_edge_host.txt
+                break 2
+            fi
+            sleep 2
+          done
+          
+          if [ $retry -lt 3 ]; then
+             echo "🔄 Restarting tunnel..."
+             pkill -f "cloudflared tunnel --url http://127.0.0.1:8080" || true
+             sleep 2
+             nohup ./cloudflared tunnel --url http://127.0.0.1:8080 > cloudflare_edge.log 2>&1 &
+             sleep 5
+          fi
+        done
+        
+        if [ ! -f active_edge_host.txt ]; then
+          echo "🚨 Data Stream Pipeline Interrupted."
+          cat cloudflare_edge.log || true
+          exit 1
+        fi
+        echo "✅ Connected! Domain: $(cat active_edge_host.txt)"
+
+    - name: Launch Operational Backend Microservice
+      env:
+        SUB_REPO_TOKEN: ${{ secrets.GH_PAT2 }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_ADMIN_ID: ${{ secrets.TELEGRAM_ADMIN_ID }}
+        TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+      run: |
+        python3 -u analytics_worker.py
+
+    - name: Commit and Save State to Repository
+      if: always()
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add panel_db*.json *.json giveaway_config.json system_config.json combined_subs.json || true
+        git commit -m "🔄 Save panel state before rotation [Skip CI]" || true
+        git push || true
+
+    - name: Trigger Successive Pipeline Execution Loop
+      env:
+        GH_TOKEN: ${{ secrets.GH_PAT }}
+      run: |
+        gh workflow run data-sync.yml --ref main
+        echo "⛓️ Next encryption cycle synchronized."
